@@ -1,11 +1,12 @@
 package log
 
 import (
+	"bytes"
 	"fmt"
+	"log"
 	"os"
 	"runtime"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -29,20 +30,13 @@ var LevelName [6]string = [6]string{"Trace", "Debug", "Info", "Warn", "Error", "
 
 const TimeFormat = "2006/01/02 15:04:05"
 
-const maxBufPoolSize = 16
-
 type Logger struct {
-	sync.Mutex
-
 	level int
 	flag  int
 
 	handler Handler
 
-	quit chan struct{}
-	msg  chan []byte
-
-	bufs [][]byte
+	buf *bytes.Buffer
 }
 
 //new a logger with specified handler and flag
@@ -54,13 +48,7 @@ func New(handler Handler, flag int) *Logger {
 
 	l.flag = flag
 
-	l.quit = make(chan struct{})
-
-	l.msg = make(chan []byte, 1024)
-
-	l.bufs = make([][]byte, 0, 16)
-
-	go l.run()
+	l.buf = &bytes.Buffer{}
 
 	return l
 }
@@ -77,50 +65,6 @@ func newStdHandler() *StreamHandler {
 
 var std = NewDefault(newStdHandler())
 
-func (l *Logger) run() {
-	for {
-		select {
-		case msg := <-l.msg:
-			l.handler.Write(msg)
-			l.putBuf(msg)
-		case <-l.quit:
-			l.handler.Close()
-		}
-	}
-}
-
-func (l *Logger) popBuf() []byte {
-	l.Lock()
-	var buf []byte
-	if len(l.bufs) == 0 {
-		buf = make([]byte, 0, 1024)
-	} else {
-		buf = l.bufs[len(l.bufs)-1]
-		l.bufs = l.bufs[0 : len(l.bufs)-1]
-	}
-	l.Unlock()
-
-	return buf
-}
-
-func (l *Logger) putBuf(buf []byte) {
-	l.Lock()
-	if len(l.bufs) < maxBufPoolSize {
-		buf = buf[0:0]
-		l.bufs = append(l.bufs, buf)
-	}
-	l.Unlock()
-}
-
-func (l *Logger) Close() {
-	if l.quit == nil {
-		return
-	}
-
-	close(l.quit)
-	l.quit = nil
-}
-
 //set log level, any log level less than it will not log
 func (l *Logger) SetLevel(level int) {
 	l.level = level
@@ -133,13 +77,13 @@ func (l *Logger) Output(callDepth int, level int, format string, v ...interface{
 		return
 	}
 
-	buf := l.popBuf()
+	buf := l.buf
 
 	if l.flag&Ltime > 0 {
 		now := time.Now().Format(TimeFormat)
-		buf = append(buf, '[')
-		buf = append(buf, now...)
-		buf = append(buf, "] "...)
+		buf.WriteByte('[')
+		buf.WriteString(now)
+		buf.WriteString("] ")
 	}
 
 	if l.flag&Lfile > 0 {
@@ -156,28 +100,29 @@ func (l *Logger) Output(callDepth int, level int, format string, v ...interface{
 			}
 		}
 
-		buf = append(buf, file...)
-		buf = append(buf, ':')
+		buf.WriteString(file)
+		buf.WriteByte(':')
 
-		buf = strconv.AppendInt(buf, int64(line), 10)
-		buf = append(buf, ' ')
+		buf.WriteString(strconv.Itoa(line))
+		buf.WriteByte(' ')
 	}
 
 	if l.flag&Llevel > 0 {
-		buf = append(buf, '[')
-		buf = append(buf, LevelName[level]...)
-		buf = append(buf, "] "...)
+		buf.WriteByte('[')
+		buf.WriteString(LevelName[level])
+		buf.WriteString("] ")
 	}
 
 	s := fmt.Sprintf(format, v...)
 
-	buf = append(buf, s...)
+	buf.WriteString(s)
 
 	if s[len(s)-1] != '\n' {
-		buf = append(buf, '\n')
+		buf.WriteByte('\n')
 	}
 
-	l.msg <- buf
+	log.Println(buf)
+	buf.Reset()
 }
 
 //log with Trace level
