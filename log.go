@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -31,6 +32,8 @@ var LevelName [6]string = [6]string{"Trace", "Debug", "Info", "Warn", "Error", "
 const TimeFormat = "2006/01/02 15:04:05"
 
 type Logger struct {
+	sync.Mutex
+
 	level int
 	flag  int
 
@@ -67,12 +70,17 @@ var std = NewDefault(newStdHandler())
 
 //set log level, any log level less than it will not log
 func (l *Logger) SetLevel(level int) {
+	l.Lock()
 	l.level = level
+	l.Unlock()
 }
 
 //a low interface, maybe you can use it for your special log format
 //but it may be not exported later......
 func (l *Logger) Output(callDepth int, level int, format string, v ...interface{}) {
+	l.Lock()
+	defer l.Unlock()
+
 	if l.level > level {
 		return
 	}
